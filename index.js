@@ -1,17 +1,30 @@
 const axios = require('axios');
+const supabase = require('./config/supabase');
 const { dateToTimestamp, formatDate, getDates } = require('./utils');
 
-// Cấu hình tham số
-const SYMBOLS = ['VNINDEX']; // Danh sách các symbol
-const RESOLUTION = '1D'; // 1D = daily; có thể đổi thành 1W, 1M nếu cần
-const RESOLUTION_1W = '1W';
+const { sendTelegramNotification } = require('./bot');
 
-// Tính SMA (Simple Moving Average)
+// Lấy danh sách symbol từ Supabase
+async function getWatchedSymbols() {
+  const { data, error } = await supabase
+    .from('watched_symbols')
+    .select('symbol')
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Lỗi khi lấy danh sách symbol:', error.message);
+    throw new Error('Không thể lấy danh sách symbol');
+  }
+
+  return data.map(row => row.symbol);
+}
+
+// Tính SMA
 function calculateSMA(prices, period) {
   const sma = [];
   for (let i = 0; i < prices.length; i++) {
     if (i < period - 1) {
-      sma.push(null); // Chưa đủ dữ liệu
+      sma.push(null);
     } else {
       const sum = prices.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
       sma.push(Number((sum / period).toFixed(4)));
@@ -20,24 +33,55 @@ function calculateSMA(prices, period) {
   return sma;
 }
 
+// Hàm lấy dữ liệu tuần từ dữ liệu ngày (mô phỏng)
+function getWeeklyDataFromDaily(timestamps, closes) {
+  const weeklyCloses = [];
+  const weeklyTimestamps = [];
+  let lastWeek = null;
+
+  for (let i = 0; i < timestamps.length; i++) {
+    const date = new Date(timestamps[i] * 1000);
+    const weekNum = getWeekNumber(date);
+
+    if (lastWeek === null || weekNum !== lastWeek) {
+      weeklyCloses.push(closes[i]);
+      weeklyTimestamps.push(timestamps[i]);
+      lastWeek = weekNum;
+    }
+  }
+
+  return { timestamps: weeklyTimestamps, closes: weeklyCloses };
+}
+
+// Hàm hỗ trợ: lấy số tuần trong năm
+function getWeekNumber(d) {
+  d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+}
+
 // Hàm xử lý cho từng symbol
-async function checkMASingle(symbol) {
+async function checkMASingle(symbol, resolution = '1D') {
   try {
     console.log(`\n🔄 Đang xử lý symbol: ${symbol}`);
-    console.log('='.repeat(50));
+    let fromDate, endDate;
+    if (resolution === '1W') {
+      const { oneYearAgo, today } = getDates();
+      const endDateStr = formatDate(today);
+      const fromDateStr = formatDate(oneYearAgo);
+      fromDate = dateToTimestamp(fromDateStr);
+      endDate = dateToTimestamp(endDateStr);
+    } else {
+      const { threeMonthsAgo, today } = getDates();
+      const endDateStr = formatDate(today);
+      const fromDateStr = formatDate(threeMonthsAgo);
+      fromDate = dateToTimestamp(fromDateStr);
+      endDate = dateToTimestamp(endDateStr);
+    }
 
-    const { threeMonthsAgo, today } = getDates();
-
-    const endDateStr = formatDate(today);
-    const fromDateStr = formatDate(threeMonthsAgo);
-
-    const fromDate = dateToTimestamp(fromDateStr);
-    const endDate = dateToTimestamp(endDateStr);
-
-    console.log(`🔍 Đang lấy dữ liệu ${symbol} từ ${threeMonthsAgo.toLocaleDateString()} đến ${today.toLocaleDateString()}`);
-
-    // URL API
-    const API_URL = `https://api.24hmoney.vn/tradingview/history?symbol=${symbol}&resolution=${RESOLUTION}&from=${fromDate}&to=${endDate}`;
+    const API_URL = `https://api.24hmoney.vn/tradingview/history?symbol=${symbol}&resolution=1D&from=${fromDate}&to=${endDate}`;
 
     const { data } = await axios.get(API_URL, {
       timeout: 10000,
@@ -50,214 +94,96 @@ async function checkMASingle(symbol) {
       throw new Error(`API error: ${data.s}`);
     }
 
-    const { t, c, o, h, l, v } = data;
-    console.log(`✅ Nhận được ${c.length} phiên`);
+    let { t, c, o, h, l, v } = data;
 
-    // Tính MA
+    if (resolution === '1W') {
+      const weeklyData = getWeeklyDataFromDaily(t, c);
+      t = weeklyData.timestamps;
+      c = weeklyData.closes;
+    }
+
     const ma10 = calculateSMA(c, 10);
     const ma20 = calculateSMA(c, 20);
     const ma50 = calculateSMA(c, 50);
 
-    // Lấy giá và MA tại phiên gần nhất
     const lastIndex = c.length - 1;
     const currentPrice = c[lastIndex];
     const currentMA10 = ma10[lastIndex];
     const currentMA20 = ma20[lastIndex];
     const currentMA50 = ma50[lastIndex];
 
-    // Kiểm tra điều kiện
     const isBelowMA10 = currentMA10 !== null && currentPrice < currentMA10;
     const isBelowMA20 = currentMA20 !== null && currentPrice < currentMA20;
     const isBelowMA50 = currentMA50 !== null && currentPrice < currentMA50;
 
     const isBelowAll = isBelowMA10 && isBelowMA20 && isBelowMA50;
 
-    // In kết quả
-    console.log('\n📈 KẾT QUẢ PHÂN TÍCH MA:');
-    console.log(`- Giá hiện tại (close): ${currentPrice}`);
-    console.log(`- MA10: ${currentMA10 !== null ? currentMA10 : '❌ Chưa đủ dữ liệu'}`);
-    console.log(`- MA20: ${currentMA20 !== null ? currentMA20 : '❌ Chưa đủ dữ liệu'}`);
-    console.log(`- MA50: ${currentMA50 !== null ? currentMA50 : '❌ Chưa đủ dữ liệu'}`);
-
-    console.log('\n🔍 Kiểm tra vị trí giá:');
-    console.log(`- Dưới MA10? ${isBelowMA10 ? '✅ Có' : '❌ Không'}`);
-    console.log(`- Dưới MA20? ${isBelowMA20 ? '✅ Có' : '❌ Không'}`);
-    console.log(`- Dưới MA50? ${isBelowMA50 ? '✅ Có' : '❌ Không'}`);
-
-    console.log('\n🎯 KẾT LUẬN:');
-    if (isBelowAll) {
-      console.log('🔴 GIÁ ĐANG NẰM DƯỚI CẢ 3 ĐƯỜNG MA (10, 20, 50)');
-      console.log('→ Xu hướng ngắn & trung hạn: GIẢM MẠNH');
-      console.log('→ Cảnh báo: thị trường trong vùng điều chỉnh sâu / quá bán');
-      console.log('→ Lưu ý: có thể là cơ hội mua giá rẻ nếu có tín hiệu đảo chiều');
-    } else if (currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50) {
-      console.log('🟢 GIÁ > MA10 > MA20 > MA50');
-      console.log('→ Xu hướng tăng mạnh — thị trường "bò"');
-    } else {
-      console.log('🟡 Giá đang dao động trong vùng MA — xu hướng trung lập / tích lũy');
-    }
-
     return {
       symbol,
+      resolution,
       currentPrice,
-      currentMA10,
-      currentMA20,
-      currentMA50,
+      isBelowMA10,
+      isBelowMA20,
       isBelowAll,
-      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50
+      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50[lastIndex]
     };
 
   } catch (err) {
     console.error(`❌ Lỗi khi xử lý ${symbol}:`, err.message);
-    if (err.response) {
-      console.error('→ Mã lỗi HTTP:', err.response.status);
-      console.error('→ Response data:', err.response.data);
-    }
     return {
       symbol,
+      resolution,
       error: err.message
     };
   }
 }
 
+// Hàm kiểm tra MA chính
+async function checkAllMA() {
+  const symbols = await getWatchedSymbols();
 
-async function checkMAWeekSingle(symbol) {
-  try {
-    console.log(`\n🔄 Đang xử lý symbol: ${symbol}`);
-    console.log('='.repeat(50));
+  console.log('📢 [index.js:145]', symbols);
+  let message = '';
 
-    const { threeMonthsAgo, today } = getDates();
-
-    const endDateStr = formatDate(today);
-    const fromDateStr = formatDate(threeMonthsAgo);
-
-    const fromDate = dateToTimestamp(fromDateStr);
-    const endDate = dateToTimestamp(endDateStr);
-
-    console.log(`🔍 Đang lấy dữ liệu ${symbol} từ ${threeMonthsAgo.toLocaleDateString()} đến ${today.toLocaleDateString()}`);
-
-    // URL API
-    const API_URL = `https://api.24hmoney.vn/tradingview/history?symbol=${symbol}&resolution=${RESOLUTION_1W}&from=${fromDate}&to=${endDate}`;
-
-    const { data } = await axios.get(API_URL, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; MA-Checker/1.0)'
-      }
-    });
-
-    if (data.s !== 'ok') {
-      throw new Error(`API error: ${data.s}`);
-    }
-
-    const { t, c, o, h, l, v } = data;
-    console.log(`✅ Nhận được ${c.length} phiên`);
-
-    // Tính MA
-    const ma10 = calculateSMA(c, 10);
-    const ma20 = calculateSMA(c, 20);
-    const ma50 = calculateSMA(c, 50);
-
-    // Lấy giá và MA tại phiên gần nhất
-    const lastIndex = c.length - 1;
-    const currentPrice = c[lastIndex];
-    const currentMA10 = ma10[lastIndex];
-    const currentMA20 = ma20[lastIndex];
-    const currentMA50 = ma50[lastIndex];
-
-    // Kiểm tra điều kiện
-    const isBelowMA10 = currentMA10 !== null && currentPrice < currentMA10;
-    const isBelowMA20 = currentMA20 !== null && currentPrice < currentMA20;
-    const isBelowMA50 = currentMA50 !== null && currentPrice < currentMA50;
-
-    const isBelowAll = isBelowMA10 && isBelowMA20 && isBelowMA50;
-
-    // In kết quả
-    console.log('\n📈 KẾT QUẢ PHÂN TÍCH MA khung TUẦN:');
-    console.log(`- Giá hiện tại (close): ${currentPrice}`);
-    console.log(`- MA10 tuần: ${currentMA10 !== null ? currentMA10 : '❌ Chưa đủ dữ liệu'}`);
-    console.log(`- MA20 tuần: ${currentMA20 !== null ? currentMA20 : '❌ Chưa đủ dữ liệu'}`);
-    console.log(`- MA50 tuần: ${currentMA50 !== null ? currentMA50 : '❌ Chưa đủ dữ liệu'}`);
-
-    console.log('\n🔍 Kiểm tra vị trí giá:');
-    console.log(`- Dưới MA10 tuần? ${isBelowMA10 ? '✅ Có' : '❌ Không'}`);
-    console.log(`- Dưới MA20 tuần? ${isBelowMA20 ? '✅ Có' : '❌ Không'}`);
-    console.log(`- Dưới MA50 tuần? ${isBelowMA50 ? '✅ Có' : '❌ Không'}`);
-
-    console.log('\n🎯 KẾT LUẬN:');
-    if (isBelowAll) {
-      console.log('🔴 GIÁ ĐANG NẰM DƯỚI CẢ 3 ĐƯỜNG MA tuần (10, 20, 50)');
-      console.log('→ Xu hướng ngắn & trung hạn: GIẢM MẠNH');
-      console.log('→ Cảnh báo: thị trường trong vùng điều chỉnh sâu / quá bán');
-      console.log('→ Lưu ý: có thể là cơ hội mua giá rẻ nếu có tín hiệu đảo chiều');
-    } else if (currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50) {
-      console.log('🟢 GIÁ > MA10 tuần > MA20 tuần > MA50 tuần');
-      console.log('→ Xu hướng tăng mạnh — thị trường "bò"');
-    } else {
-      console.log('🟡 Giá đang dao động trong vùng MA — xu hướng trung lập / tích lũy');
-    }
-
-    return {
-      symbol,
-      currentPrice,
-      currentMA10,
-      currentMA20,
-      currentMA50,
-      isBelowAll,
-      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50
-    };
-
-  } catch (err) {
-    console.error(`❌ Lỗi khi xử lý ${symbol}:`, err.message);
-    if (err.response) {
-      console.error('→ Mã lỗi HTTP:', err.response.status);
-      console.error('→ Response data:', err.response.data);
-    }
-    return {
-      symbol,
-      error: err.message
-    };
-  }
-}
-
-// Hàm chính
-async function checkMA() {
-  console.log('🚀 Bắt đầu kiểm tra MA cho các symbol...\n');
-
-  const results = [];
-  const resultsWeek = [];
-
-  for (const symbol of SYMBOLS) {
+  for (const symbol of symbols) {
     const result = await checkMASingle(symbol);
-    const resultWeek = await checkMAWeekSingle(symbol);
-    results.push(result);
-    resultsWeek.push(resultWeek);
+    const { isBelowMA10, isBelowMA20 } = result;
+    if (isBelowMA10 && isBelowMA20) {
+      const resultW = await checkMASingle(symbol, '1W');
+      const { isBelowMA10: isBelowMA10W, isBelowMA20: isBelowMA20W } = resultW;
+      if (isBelowMA10W && isBelowMA20W) {
+        console.log(`📢 Gửi thông báo tới Telegram 💀`);
+        message = `
+          🔍 Đang lấy dữ liệu ${symbol}
+          - Dưới MA10 ngày và tuần? ✅ Có
+          - Dưới MA20 ngày và tuần? ✅ Có
 
-    // Thêm khoảng cách giữa các symbol (trừ symbol cuối cùng)
-    if (SYMBOLS.indexOf(symbol) < SYMBOLS.length - 1) {
-      console.log('\n' + '='.repeat(60) + '\n');
+          🎯 KẾT LUẬN:
+          ===> Khuyến nghị: BÁN
+        `;
+
+        await sendTelegramNotification(message);
+      }
+
+      if (isBelowMA10W && !isBelowMA20W) {
+        console.log(`📢 Gửi thông báo tới Telegram 💀`);
+        message = `
+          🔍 Đang lấy dữ liệu ${symbol}
+          - Dưới MA10 ngày và tuần? ✅ Có
+          - Dưới MA20 ngày? ✅ Có
+          - Dưới MA20 tuần? ❌ Không
+
+          🎯 KẾT LUẬN:
+          ===> Khuyến nghị: BÁN 1 phần
+        `;
+
+        await sendTelegramNotification(message);
+      }
+
     }
   }
 
-  // Tóm tắt kết quả cuối cùng
-  // console.log('\n📋 TỔNG KẾT:');
-  // console.log('='.repeat(30));
-  // results.forEach(result => {
-  //   if (result.error) {
-  //     console.log(`- ${result.symbol}: ❌ Lỗi - ${result.error}`);
-  //   } else {
-  //     let status = '';
-  //     if (result.isBelowAll) {
-  //       status = '🔴 Giảm mạnh';
-  //     } else if (result.isBullish) {
-  //       status = '🟢 Tăng mạnh';
-  //     } else {
-  //       status = '🟡 Trung lập';
-  //     }
-  //     console.log(`- ${result.symbol}: ${status} (Giá: ${result.currentPrice})`);
-  //   }
-  // });
+
 }
 
-// Chạy
-checkMA();
+checkAllMA();

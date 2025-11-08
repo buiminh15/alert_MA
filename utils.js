@@ -54,11 +54,15 @@ function getDates() {
     threeMonthsAgo.setDate(0); // setDate(0) = ngày cuối tháng trước
   }
 
+  // Sao chép today → lùi 1 năm
+  const oneYearAgo = new Date(today);
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
   return {
     today,
-    threeMonthsAgo
+    threeMonthsAgo,
+    oneYearAgo
   };
-
 }
 
 

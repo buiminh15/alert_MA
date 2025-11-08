@@ -1,0 +1,36 @@
+name: Cron Job - MA Checker
+
+on:
+  schedule:
+    # Chạy mỗi 30 phút một lần (bạn có thể thay đổi)
+    - cron: "*/30 * * * *"
+  # Cho phép chạy thủ công từ giao diện GitHub
+  workflow_dispatch:
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout code từ repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Cài Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18" # hoặc version bạn đang dùng
+
+      # 3. Cài dependencies
+      - name: Install dependencies
+        run: npm install
+
+      # 4. Chạy script
+      - name: Run MA checker
+        run: node src/index.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
