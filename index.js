@@ -1,7 +1,6 @@
 const axios = require('axios');
 const supabase = require('./config/supabase');
 const { dateToTimestamp, formatDate, getDates } = require('./utils');
-
 const { sendTelegramNotification } = require('./bot');
 
 // Lấy danh sách symbol từ Supabase
@@ -33,9 +32,24 @@ function calculateSMA(prices, period) {
   return sma;
 }
 
+// Tính trung bình volume trong n ngày
+function calculateAvgVolume(volumes, period) {
+  const avg = [];
+  for (let i = 0; i < volumes.length; i++) {
+    if (i < period - 1) {
+      avg.push(null);
+    } else {
+      const sum = volumes.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
+      avg.push(Number((sum / period).toFixed(2)));
+    }
+  }
+  return avg;
+}
+
 // Hàm lấy dữ liệu tuần từ dữ liệu ngày (mô phỏng)
-function getWeeklyDataFromDaily(timestamps, closes) {
+function getWeeklyDataFromDaily(timestamps, closes, volumes) {
   const weeklyCloses = [];
+  const weeklyVolumes = [];
   const weeklyTimestamps = [];
   let lastWeek = null;
 
@@ -45,12 +59,13 @@ function getWeeklyDataFromDaily(timestamps, closes) {
 
     if (lastWeek === null || weekNum !== lastWeek) {
       weeklyCloses.push(closes[i]);
+      weeklyVolumes.push(volumes[i]);
       weeklyTimestamps.push(timestamps[i]);
       lastWeek = weekNum;
     }
   }
 
-  return { timestamps: weeklyTimestamps, closes: weeklyCloses };
+  return { timestamps: weeklyTimestamps, closes: weeklyCloses, volumes: weeklyVolumes };
 }
 
 // Hàm hỗ trợ: lấy số tuần trong năm
@@ -65,7 +80,7 @@ function getWeekNumber(d) {
 // Hàm xử lý cho từng symbol
 async function checkMASingle(symbol, resolution = '1D') {
   try {
-    console.log(`\n🔄 Đang xử lý symbol: ${symbol}`);
+    if (resolution === '1D') console.log(`\n🔄 Đang xử lý symbol: ${symbol}`);
     let fromDate, endDate;
     if (resolution === '1W') {
       const { oneYearAgo, today } = getDates();
@@ -80,7 +95,6 @@ async function checkMASingle(symbol, resolution = '1D') {
       fromDate = dateToTimestamp(fromDateStr);
       endDate = dateToTimestamp(endDateStr);
     }
-
     const API_URL = `https://api.24hmoney.vn/tradingview/history?symbol=${symbol}&resolution=1D&from=${fromDate}&to=${endDate}`;
 
     const { data } = await axios.get(API_URL, {
@@ -97,17 +111,23 @@ async function checkMASingle(symbol, resolution = '1D') {
     let { t, c, o, h, l, v } = data;
 
     if (resolution === '1W') {
-      const weeklyData = getWeeklyDataFromDaily(t, c);
+      const weeklyData = getWeeklyDataFromDaily(t, c, v);
       t = weeklyData.timestamps;
       c = weeklyData.closes;
+      v = weeklyData.volumes;
     }
 
     const ma10 = calculateSMA(c, 10);
     const ma20 = calculateSMA(c, 20);
     const ma50 = calculateSMA(c, 50);
 
+    const avgVol20 = calculateAvgVolume(v, 20);
+
     const lastIndex = c.length - 1;
     const currentPrice = c[lastIndex];
+    const currentVolume = v[lastIndex];
+    const currentAvgVol20 = avgVol20[lastIndex];
+
     const currentMA10 = ma10[lastIndex];
     const currentMA20 = ma20[lastIndex];
     const currentMA50 = ma50[lastIndex];
@@ -118,14 +138,20 @@ async function checkMASingle(symbol, resolution = '1D') {
 
     const isBelowAll = isBelowMA10 && isBelowMA20 && isBelowMA50;
 
+    // Thêm điều kiện volume
+    const isHighVolume = currentAvgVol20 && currentVolume > currentAvgVol20;
+
     return {
       symbol,
       resolution,
       currentPrice,
+      currentVolume,
+      currentAvgVol20,
+      isHighVolume,
       isBelowMA10,
       isBelowMA20,
       isBelowAll,
-      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50[lastIndex]
+      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50
     };
 
   } catch (err) {
@@ -142,48 +168,101 @@ async function checkMASingle(symbol, resolution = '1D') {
 async function checkAllMA() {
   const symbols = await getWatchedSymbols();
 
-  console.log('📢 [index.js:145]', symbols);
   let message = '';
 
   for (const symbol of symbols) {
     const result = await checkMASingle(symbol);
-    const { isBelowMA10, isBelowMA20 } = result;
-    if (isBelowMA10 && isBelowMA20) {
+    const {
+      isBelowMA10,
+      isBelowMA20,
+      currentVolume,
+      currentAvgVol20,
+      isHighVolume,
+      isBelowAll,
+      isBullish
+    } = result;
+
+    // Tín hiệu mạnh: giá dưới MA10, MA20, MA50 (toàn bộ)
+    if (isBelowAll) {
       const resultW = await checkMASingle(symbol, '1W');
       const { isBelowMA10: isBelowMA10W, isBelowMA20: isBelowMA20W } = resultW;
+
       if (isBelowMA10W && isBelowMA20W) {
-        console.log(`📢 Gửi thông báo tới Telegram 💀`);
         message = `
-          🔍 Đang lấy dữ liệu ${symbol}
-          - Dưới MA10 ngày và tuần? ✅ Có
-          - Dưới MA20 ngày và tuần? ✅ Có
+        🔍 ${symbol} - Dưới cả MA10, MA20, MA50 (Tín hiệu yếu cực)
+        - Volume hiện tại: ${currentVolume.toFixed(2)}
+        - AVG Volume 20 ngày: ${currentAvgVol20.toFixed(2)}
+        - Volume cao hơn TB? ${isHighVolume ? '✅ Có' : '❌ Không'}
 
-          🎯 KẾT LUẬN:
-          ===> Khuyến nghị: BÁN
-        `;
+        🎯 KẾT LUẬN:
+        ===> Khuyến nghị: BÁN (Tín hiệu yếu rõ rệt)
+      `;
+        console.log(message);
+        await sendTelegramNotification(message);
+      }
+    }
 
+    // Tín hiệu bán: giá dưới MA10 và MA20 (nhưng có thể chưa tới MA50)
+    else if (isBelowMA10 && isBelowMA20) {
+      const resultW = await checkMASingle(symbol, '1W');
+      const { isBelowMA10: isBelowMA10W, isBelowMA20: isBelowMA20W, isHighVolume: isHighVolumeW, currentAvgVol20: currentAvgVol20W,
+        currentVolume: currentVolumeW
+      } = resultW;
+
+      if (isBelowMA10W && isBelowMA20W) {
+        message = `
+        🔍 Đang lấy dữ liệu ${symbol}
+        - Dưới MA10 ngày và tuần? ✅ Có
+        - Dưới MA20 ngày và tuần? ✅ Có
+        - Volume hiện tại (ngày): ${currentVolumeW.toFixed(2)}
+        - AVG Volume 20 ngày: ${currentAvgVol20W.toFixed(2)}
+        - Volume cao hơn TB? ${isHighVolumeW ? '✅ Có' : '❌ Không'}
+
+        🎯 KẾT LUẬN:
+        ===> Khuyến nghị: BÁN ${isHighVolumeW ? '(Tín hiệu mạnh hơn do volume tăng)' : ''}
+      `;
+        console.log(message);
         await sendTelegramNotification(message);
       }
 
       if (isBelowMA10W && !isBelowMA20W) {
-        console.log(`📢 Gửi thông báo tới Telegram 💀`);
         message = `
-          🔍 Đang lấy dữ liệu ${symbol}
-          - Dưới MA10 ngày và tuần? ✅ Có
-          - Dưới MA20 ngày? ✅ Có
-          - Dưới MA20 tuần? ❌ Không
+        🔍 Đang lấy dữ liệu ${symbol}
+        - Dưới MA10 ngày và tuần? ✅ Có
+        - Dưới MA20 ngày? ✅ Có
+        - Dưới MA20 tuần? ❌ Không
+        - Volume hiện tại (ngày): ${currentVolumeW.toFixed(2)}
+        - AVG Volume 20 ngày: ${currentAvgVol20W.toFixed(2)}
+        - Volume cao hơn TB? ${isHighVolumeW ? '✅ Có' : '❌ Không'}
 
-          🎯 KẾT LUẬN:
-          ===> Khuyến nghị: BÁN 1 phần
-        `;
-
+        🎯 KẾT LUẬN:
+        ===> Khuyến nghị: BÁN 1 phần ${isHighVolumeW ? '(Tín hiệu mạnh hơn do volume tăng)' : ''}
+      `;
+        console.log(message);
         await sendTelegramNotification(message);
       }
+    }
 
+    // Thêm: Tín hiệu mua nếu isBullish + volume mạnh
+    if (isBullish && isHighVolume) {
+      const resultW = await checkMASingle(symbol, '1W');
+      const { isBullish: isBullishW } = resultW;
+
+      if (isBullishW) {
+        message = `
+        🚀 ${symbol} - Xu hướng tăng đẹp (giá > MA10 > MA20 > MA50)
+        - Volume hiện tại: ${currentVolume.toFixed(2)}
+        - AVG Volume 20 ngày: ${currentAvgVol20.toFixed(2)}
+        - Volume cao hơn TB? ✅ Có
+
+        🎯 KẾT LUẬN:
+        ===> Khuyến nghị: MUA (Tín hiệu tăng mạnh, có volume hỗ trợ)
+      `;
+        console.log(message);
+        await sendTelegramNotification(message);
+      }
     }
   }
-
-
 }
 
 checkAllMA();
