@@ -65,5 +65,4 @@ function getDates() {
   };
 }
 
-
-export { dateToTimestamp, formatDate, getDates };
+module.exports = { dateToTimestamp, formatDate, getDates };
