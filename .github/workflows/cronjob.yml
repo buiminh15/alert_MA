@@ -2,8 +2,8 @@ name: Cron Job - MA Checker
 
 on:
   schedule:
-    # Chạy mỗi 30 phút một lần, từ Thứ Hai đến Thứ Sáu (1-5)
-    - cron: "*/30 * * * 1-5"
+    # Chạy mỗi 30 phút một lần, từ Thứ Hai đến Thứ Sáu (1-5), từ 9h đến 15h30
+    - cron: "*/30 9-15 * * 1-5"
   # Cho phép chạy thủ công từ giao diện GitHub
   workflow_dispatch:
 
