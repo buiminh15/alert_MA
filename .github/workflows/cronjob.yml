@@ -28,7 +28,7 @@ jobs:
 
       # 4. Chạy script
       - name: Run MA checker
-        run: node src/index.js
+        run: node index.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
