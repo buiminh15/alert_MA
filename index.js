@@ -95,6 +95,7 @@ async function checkMASingle(symbol, resolution = '1D') {
       fromDate = dateToTimestamp(fromDateStr);
       endDate = dateToTimestamp(endDateStr);
     }
+
     const API_URL = `https://api.24hmoney.vn/tradingview/history?symbol=${symbol}&resolution=1D&from=${fromDate}&to=${endDate}`;
 
     const { data } = await axios.get(API_URL, {
@@ -151,7 +152,12 @@ async function checkMASingle(symbol, resolution = '1D') {
       isBelowMA10,
       isBelowMA20,
       isBelowAll,
-      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50
+      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50[lastIndex],
+      timestamps: t,
+      closes: c,
+      highs: h,
+      lows: l,
+      volumes: v
     };
 
   } catch (err) {
@@ -162,6 +168,42 @@ async function checkMASingle(symbol, resolution = '1D') {
       error: err.message
     };
   }
+}
+
+// 🚨 HÀM MỚI: Phát hiện điểm bán Darvas Box
+function detectDarvasBoxSells(timestamps, highs, lows, closes, boxPeriod = 5) {
+  const results = [];
+  for (let i = boxPeriod; i < closes.length; i++) {
+    // Lấy N phiên trước đó để xác định hộp
+    const lookback = highs.slice(i - boxPeriod, i);
+    const lookbackLows = lows.slice(i - boxPeriod, i);
+
+    // Xác định Top và Bottom của hộp
+    const top = Math.max(...lookback);
+    const bottom = Math.min(...lookbackLows);
+
+    // Giá hiện tại (hôm nay)
+    const currentClose = closes[i];
+
+    // Đáy của hộp hôm qua
+    const prevLookbackLows = lows.slice(i - boxPeriod - 1, i - 1);
+    const prevBottom = Math.min(...prevLookbackLows);
+
+    // Tín hiệu bán: giá hôm nay < đáy của hộp hôm qua
+    const sellSignal = currentClose < prevBottom;
+
+    results.push({
+      date: new Date(timestamps[i] * 1000).toISOString().split('T')[0],
+      high: highs[i],
+      low: lows[i],
+      close: closes[i],
+      top: top,
+      bottom: bottom,
+      isSellSignal: sellSignal
+    });
+  }
+
+  return results;
 }
 
 // Hàm kiểm tra MA chính
@@ -179,8 +221,31 @@ async function checkAllMA() {
       currentAvgVol20,
       isHighVolume,
       isBelowAll,
-      isBullish
+      isBullish,
+      timestamps,
+      highs,
+      lows,
+      closes
     } = result;
+
+    // 🚨 GỌI HÀM TÌM ĐIỂM BÁN THEO DARVAS BOX
+    const darvasSignals = detectDarvasBoxSells(timestamps, highs, lows, closes);
+    const latestDarvasSignal = darvasSignals[darvasSignals.length - 1];
+
+    if (latestDarvasSignal && latestDarvasSignal.isSellSignal) {
+      message = `
+        🚨 DARVAS BOX SELL SIGNAL
+        - Cổ phiếu: ${symbol}
+        - Ngày: ${latestDarvasSignal.date}
+        - Giá đóng cửa: ${latestDarvasSignal.close.toFixed(2)}
+        - Giá phá đáy hộp: ${latestDarvasSignal.bottom.toFixed(2)}
+
+        🎯 KẾT LUẬN:
+        ===> Khuyến nghị: BÁN (Giá phá đáy hộp Darvas)
+      `;
+      console.log(message);
+      await sendTelegramNotification(message);
+    }
 
     // Tín hiệu mạnh: giá dưới MA10, MA20, MA50 (toàn bộ)
     if (isBelowAll) {
@@ -205,7 +270,11 @@ async function checkAllMA() {
     // Tín hiệu bán: giá dưới MA10 và MA20 (nhưng có thể chưa tới MA50)
     else if (isBelowMA10 && isBelowMA20) {
       const resultW = await checkMASingle(symbol, '1W');
-      const { isBelowMA10: isBelowMA10W, isBelowMA20: isBelowMA20W, isHighVolume: isHighVolumeW, currentAvgVol20: currentAvgVol20W,
+      const {
+        isBelowMA10: isBelowMA10W,
+        isBelowMA20: isBelowMA20W,
+        isHighVolume: isHighVolumeW,
+        currentAvgVol20: currentAvgVol20W,
         currentVolume: currentVolumeW
       } = resultW;
 
