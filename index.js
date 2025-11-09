@@ -47,9 +47,11 @@ function calculateAvgVolume(volumes, period) {
 }
 
 // Hàm lấy dữ liệu tuần từ dữ liệu ngày (mô phỏng)
-function getWeeklyDataFromDaily(timestamps, closes, volumes) {
+function getWeeklyDataFromDaily(timestamps, closes, volumes, highs, lows) {
   const weeklyCloses = [];
   const weeklyVolumes = [];
+  const weeklyHighs = [];
+  const weeklyLows = [];
   const weeklyTimestamps = [];
   let lastWeek = null;
 
@@ -60,12 +62,20 @@ function getWeeklyDataFromDaily(timestamps, closes, volumes) {
     if (lastWeek === null || weekNum !== lastWeek) {
       weeklyCloses.push(closes[i]);
       weeklyVolumes.push(volumes[i]);
+      weeklyHighs.push(highs[i]);
+      weeklyLows.push(lows[i]);
       weeklyTimestamps.push(timestamps[i]);
       lastWeek = weekNum;
     }
   }
 
-  return { timestamps: weeklyTimestamps, closes: weeklyCloses, volumes: weeklyVolumes };
+  return {
+    timestamps: weeklyTimestamps,
+    closes: weeklyCloses,
+    volumes: weeklyVolumes,
+    highs: weeklyHighs,
+    lows: weeklyLows
+  };
 }
 
 // Hàm hỗ trợ: lấy số tuần trong năm
@@ -112,10 +122,12 @@ async function checkMASingle(symbol, resolution = '1D') {
     let { t, c, o, h, l, v } = data;
 
     if (resolution === '1W') {
-      const weeklyData = getWeeklyDataFromDaily(t, c, v);
+      const weeklyData = getWeeklyDataFromDaily(t, c, v, h, l);
       t = weeklyData.timestamps;
       c = weeklyData.closes;
       v = weeklyData.volumes;
+      h = weeklyData.highs;
+      l = weeklyData.lows;
     }
 
     const ma10 = calculateSMA(c, 10);
@@ -170,9 +182,10 @@ async function checkMASingle(symbol, resolution = '1D') {
   }
 }
 
-// 🚨 HÀM MỚI: Phát hiện điểm bán Darvas Box
-function detectDarvasBoxSells(timestamps, highs, lows, closes, boxPeriod = 5) {
+// 🚨 HÀM MỚI: Phát hiện cả điểm mua và bán theo Darvas Box
+function detectDarvasSignals(timestamps, highs, lows, closes, boxPeriod = 5) {
   const results = [];
+
   for (let i = boxPeriod; i < closes.length; i++) {
     // Lấy N phiên trước đó để xác định hộp
     const lookback = highs.slice(i - boxPeriod, i);
@@ -185,11 +198,16 @@ function detectDarvasBoxSells(timestamps, highs, lows, closes, boxPeriod = 5) {
     // Giá hiện tại (hôm nay)
     const currentClose = closes[i];
 
-    // Đáy của hộp hôm qua
+    // Đỉnh và đáy của hộp hôm qua
+    const prevLookback = highs.slice(i - boxPeriod - 1, i - 1);
     const prevLookbackLows = lows.slice(i - boxPeriod - 1, i - 1);
+    const prevTop = Math.max(...prevLookback);
     const prevBottom = Math.min(...prevLookbackLows);
 
-    // Tín hiệu bán: giá hôm nay < đáy của hộp hôm qua
+    // Tín hiệu mua: giá hôm nay > đỉnh hộp hôm qua
+    const buySignal = currentClose > prevTop;
+
+    // Tín hiệu bán: giá hôm nay < đáy hộp hôm qua
     const sellSignal = currentClose < prevBottom;
 
     results.push({
@@ -199,6 +217,7 @@ function detectDarvasBoxSells(timestamps, highs, lows, closes, boxPeriod = 5) {
       close: closes[i],
       top: top,
       bottom: bottom,
+      isBuySignal: buySignal,
       isSellSignal: sellSignal
     });
   }
@@ -228,23 +247,40 @@ async function checkAllMA() {
       closes
     } = result;
 
-    // 🚨 GỌI HÀM TÌM ĐIỂM BÁN THEO DARVAS BOX
-    const darvasSignals = detectDarvasBoxSells(timestamps, highs, lows, closes);
+    // 🚨 GỌI HÀM TÌM ĐIỂM MUA/BÁN THEO DARVAS BOX
+    const darvasSignals = detectDarvasSignals(timestamps, highs, lows, closes);
     const latestDarvasSignal = darvasSignals[darvasSignals.length - 1];
 
-    if (latestDarvasSignal && latestDarvasSignal.isSellSignal) {
-      message = `
-        🚨 DARVAS BOX SELL SIGNAL
-        - Cổ phiếu: ${symbol}
-        - Ngày: ${latestDarvasSignal.date}
-        - Giá đóng cửa: ${latestDarvasSignal.close.toFixed(2)}
-        - Giá phá đáy hộp: ${latestDarvasSignal.bottom.toFixed(2)}
+    if (latestDarvasSignal) {
+      if (latestDarvasSignal.isBuySignal) {
+        message = `
+          🟢 DARVAS BOX BUY SIGNAL
+          - Cổ phiếu: ${symbol}
+          - Ngày: ${latestDarvasSignal.date}
+          - Giá đóng cửa: ${latestDarvasSignal.close.toFixed(2)}
+          - Vượt đỉnh hộp: ${latestDarvasSignal.top.toFixed(2)}
 
-        🎯 KẾT LUẬN:
-        ===> Khuyến nghị: BÁN (Giá phá đáy hộp Darvas)
-      `;
-      console.log(message);
-      await sendTelegramNotification(message);
+          🎯 KẾT LUẬN:
+          ===> Khuyến nghị: MUA (Giá vượt đỉnh hộp Darvas)
+        `;
+        console.log(message);
+        await sendTelegramNotification(message);
+      }
+
+      if (latestDarvasSignal.isSellSignal) {
+        message = `
+          🔴 DARVAS BOX SELL SIGNAL
+          - Cổ phiếu: ${symbol}
+          - Ngày: ${latestDarvasSignal.date}
+          - Giá đóng cửa: ${latestDarvasSignal.close.toFixed(2)}
+          - Phá đáy hộp: ${latestDarvasSignal.bottom.toFixed(2)}
+
+          🎯 KẾT LUẬN:
+          ===> Khuyến nghị: BÁN (Giá phá đáy hộp Darvas)
+        `;
+        console.log(message);
+        await sendTelegramNotification(message);
+      }
     }
 
     // Tín hiệu mạnh: giá dưới MA10, MA20, MA50 (toàn bộ)
