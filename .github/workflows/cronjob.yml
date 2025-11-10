@@ -2,8 +2,8 @@ name: Cron Job - MA Checker
 
 on:
   push:
-  branches:
-    - main
+    branches:
+      - main
   # Cho phép chạy thủ công từ giao diện GitHub
   workflow_dispatch:
 
