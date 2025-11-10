@@ -1,11 +1,15 @@
 name: Cron Job - MA Checker
 
 on:
+  push:
+  branches:
+    - main
+  # Cho phép chạy thủ công từ giao diện GitHub
+  workflow_dispatch:
+
   schedule:
     # Chạy mỗi 30 phút một lần, từ Thứ Hai đến Thứ Sáu (1-5), từ 9h đến 15h30
     - cron: "*/1 * * * *"
-  # Cho phép chạy thủ công từ giao diện GitHub
-  workflow_dispatch:
 
 jobs:
   run-script:
@@ -20,7 +24,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "20.x"
+          cache: "npm"
 
       # 3. Cài dependencies
       - name: Install dependencies
@@ -28,7 +33,7 @@ jobs:
 
       # 4. Chạy script
       - name: Run MA checker
-        run: node index.js # Cập nhật đường dẫn nếu cần
+        run: node index.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
