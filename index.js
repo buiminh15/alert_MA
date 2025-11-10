@@ -320,7 +320,7 @@ async function checkAllMA() {
 🎯 KHUYẾN NGHỊ: MUA — Tín hiệu mạnh, đa yếu tố xác nhận
 `;
         console.log(message);
-        await sendTelegramNotification(msg);
+        await sendTelegramNotification(message);
       }
 
       if (latest.isConfirmedSell) {
@@ -333,7 +333,7 @@ async function checkAllMA() {
 🎯 KHUYẾN NGHỊ: BÁN / DỪNG LỖ — Ưu tiên bảo toàn vốn
 `;
         console.log(message);
-        await sendTelegramNotification(msg);
+        await sendTelegramNotification(message);
       }
     }
 
@@ -356,7 +356,7 @@ async function checkAllMA() {
    ===> KHUYẾN NGHỊ: BÁN (Tín hiệu yếu rõ rệt)
 `;
         console.log(message);
-        await sendTelegramNotification(msg);
+        await sendTelegramNotification(message);
       }
     }
 
@@ -382,7 +382,7 @@ async function checkAllMA() {
    ===> KHUYẾN NGHỊ: BÁN ${isHighVolumeW ? '(Mạnh hơn do bùng nổ khối lượng)' : ''}
 `;
         console.log(message);
-        await sendTelegramNotification(msg);
+        await sendTelegramNotification(message);
       }
 
       if (isBelowMA10W && !isBelowMA20W) {
@@ -398,7 +398,7 @@ async function checkAllMA() {
    ===> KHUYẾN NGHỊ: BÁN 1 PHẦN ${isHighVolumeW ? '(Mạnh hơn do bùng nổ khối lượng)' : ''}
 `;
         console.log(message);
-        await sendTelegramNotification(msg);
+        await sendTelegramNotification(message);
       }
     }
 
@@ -417,7 +417,7 @@ async function checkAllMA() {
    ===> KHUYẾN NGHỊ: CÂN NHẮC MUA (Xu hướng mạnh có hỗ trợ khối lượng — theo dõi breakout Darvas hoặc hồi về MA)
 `;
         console.log(message);
-        await sendTelegramNotification(msg);
+        await sendTelegramNotification(message);
       }
     }
   }
