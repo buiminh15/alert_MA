@@ -4,11 +4,14 @@ on:
   push:
     branches:
       - main
-  # Cho phép chạy thủ công từ giao diện GitHub
+
+  # Cho phép chạy thủ công từ UI
   workflow_dispatch:
 
+  # Schedule phải nằm cùng cấp với push & workflow_dispatch
   schedule:
-    # Chạy mỗi 30 phút một lần, từ Thứ Hai đến Thứ Sáu (1-5), từ 9h đến 15h30
+    # Chạy mỗi 30 phút, từ Thứ Hai đến Thứ Sáu, từ 09:00 - 15:30 giờ Việt Nam
+    # => Tương ứng 02:00 - 08:30 UTC
     - cron: "*/1 * * * *"
 
 jobs:
@@ -16,22 +19,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout code từ repository
       - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 2. Cài Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20.x"
           cache: "npm"
 
-      # 3. Cài dependencies
       - name: Install dependencies
         run: npm install
 
-      # 4. Chạy script
       - name: Run MA checker
         run: node index.js
         env:
