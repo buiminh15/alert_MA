@@ -3,7 +3,7 @@ const supabase = require('./config/supabase');
 const { dateToTimestamp, formatDate, getDates } = require('./utils');
 const { sendTelegramNotification } = require('./bot');
 
-// Lấy danh sách symbol từ Supabase
+// ─── 1. Lấy danh sách mã theo dõi từ Supabase ─────────────────────────────────
 async function getWatchedSymbols() {
   const { data, error } = await supabase
     .from('watched_symbols')
@@ -11,14 +11,14 @@ async function getWatchedSymbols() {
     .order('created_at', { ascending: true });
 
   if (error) {
-    console.error('Lỗi khi lấy danh sách symbol:', error.message);
-    throw new Error('Không thể lấy danh sách symbol');
+    console.error('Lỗi khi lấy danh sách mã:', error.message);
+    throw new Error('Không thể lấy danh sách mã');
   }
 
   return data.map(row => row.symbol);
 }
 
-// Tính SMA
+// ─── 2. Tính SMA ──────────────────────────────────────────────────────────────
 function calculateSMA(prices, period) {
   const sma = [];
   for (let i = 0; i < prices.length; i++) {
@@ -32,7 +32,7 @@ function calculateSMA(prices, period) {
   return sma;
 }
 
-// Tính trung bình volume trong n ngày
+// ─── 3. Tính trung bình khối lượng ────────────────────────────────────────────
 function calculateAvgVolume(volumes, period) {
   const avg = [];
   for (let i = 0; i < volumes.length; i++) {
@@ -46,7 +46,7 @@ function calculateAvgVolume(volumes, period) {
   return avg;
 }
 
-// Hàm lấy dữ liệu tuần từ dữ liệu ngày (mô phỏng)
+// ─── 4. Chuyển dữ liệu ngày → tuần (đơn giản hóa) ────────────────────────────
 function getWeeklyDataFromDaily(timestamps, closes, volumes, highs, lows) {
   const weeklyCloses = [];
   const weeklyVolumes = [];
@@ -78,7 +78,6 @@ function getWeeklyDataFromDaily(timestamps, closes, volumes, highs, lows) {
   };
 }
 
-// Hàm hỗ trợ: lấy số tuần trong năm
 function getWeekNumber(d) {
   d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -87,36 +86,100 @@ function getWeekNumber(d) {
   return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
 }
 
-// Hàm xử lý cho từng symbol
+// ─── 5. 🚀 HÀM DARVAS NÂNG CAO: có xác nhận MA + khối lượng ───────────────────
+function detectDarvasWithConfirmation(
+  timestamps,
+  highs,
+  lows,
+  closes,
+  ma10,
+  ma20,
+  ma50,
+  volumes,
+  avgVol20,
+  boxPeriod = 5
+) {
+  const results = [];
+
+  for (let i = boxPeriod; i < closes.length; i++) {
+    // Hộp của "hôm qua" (từ i-boxPeriod-1 đến i-2)
+    const prevLookbackHighs = highs.slice(i - boxPeriod - 1, i - 1);
+    const prevLookbackLows = lows.slice(i - boxPeriod - 1, i - 1);
+    const prevTop = Math.max(...prevLookbackHighs);
+    const prevBottom = Math.min(...prevLookbackLows);
+
+    const currentClose = closes[i];
+    const currentVol = volumes[i];
+    const currentAvgVol = avgVol20[i];
+
+    // 🔔 Tín hiệu Darvas cơ bản
+    const basicBuy = currentClose > prevTop;
+    const basicSell = currentClose < prevBottom;
+
+    // 📈 Xác nhận xu hướng tăng: giá > MA20 > MA50
+    const isUptrend =
+      ma20[i] !== null &&
+      ma50[i] !== null &&
+      currentClose > ma20[i] &&
+      ma20[i] > ma50[i];
+
+    // 📊 Xác nhận khối lượng: KL hiện tại > trung bình 20 ngày
+    const isHighVol = currentAvgVol && currentVol > currentAvgVol;
+
+    // ✅ Tín hiệu MUA ĐÃ XÁC NHẬN
+    const confirmedBuy = basicBuy && isUptrend && isHighVol;
+
+    // 📉 Tín hiệu BÁN ĐÃ XÁC NHẬN: phá đáy + vi phạm MA20
+    const isBelowMA20 = ma20[i] !== null && currentClose < ma20[i];
+    const confirmedSell = basicSell && isBelowMA20;
+
+    results.push({
+      date: new Date(timestamps[i] * 1000).toISOString().split('T')[0],
+      close: currentClose,
+      volume: currentVol,
+      top: prevTop,
+      bottom: prevBottom,
+      ma10: ma10[i],
+      ma20: ma20[i],
+      ma50: ma50[i],
+      avgVol20: currentAvgVol,
+      isBasicBuy: basicBuy,
+      isBasicSell: basicSell,
+      isUptrend,
+      isHighVol,
+      isConfirmedBuy: confirmedBuy,
+      isConfirmedSell: confirmedSell
+    });
+  }
+
+  return results;
+}
+
+// ─── 6. Lấy & xử lý dữ liệu cho một mã cổ phiếu ───────────────────────────────
 async function checkMASingle(symbol, resolution = '1D') {
   try {
-    if (resolution === '1D') console.log(`\n🔄 Đang xử lý symbol: ${symbol}`);
+    if (resolution === '1D') console.log(`\n🔄 Đang xử lý mã: ${symbol}`);
+
     let fromDate, endDate;
     if (resolution === '1W') {
       const { oneYearAgo, today } = getDates();
-      const endDateStr = formatDate(today);
-      const fromDateStr = formatDate(oneYearAgo);
-      fromDate = dateToTimestamp(fromDateStr);
-      endDate = dateToTimestamp(endDateStr);
+      fromDate = dateToTimestamp(formatDate(oneYearAgo));
+      endDate = dateToTimestamp(formatDate(today));
     } else {
       const { threeMonthsAgo, today } = getDates();
-      const endDateStr = formatDate(today);
-      const fromDateStr = formatDate(threeMonthsAgo);
-      fromDate = dateToTimestamp(fromDateStr);
-      endDate = dateToTimestamp(endDateStr);
+      fromDate = dateToTimestamp(formatDate(threeMonthsAgo));
+      endDate = dateToTimestamp(formatDate(today));
     }
 
     const API_URL = `https://api.24hmoney.vn/tradingview/history?symbol=${symbol}&resolution=1D&from=${fromDate}&to=${endDate}`;
 
     const { data } = await axios.get(API_URL, {
       timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; MA-Checker/1.0)'
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MA-Darvas Checker/1.0)' }
     });
 
     if (data.s !== 'ok') {
-      throw new Error(`API error: ${data.s}`);
+      throw new Error(`Lỗi API: ${data.s}`);
     }
 
     let { t, c, o, h, l, v } = data;
@@ -130,244 +193,240 @@ async function checkMASingle(symbol, resolution = '1D') {
       l = weeklyData.lows;
     }
 
+    // Tính các chỉ báo
     const ma10 = calculateSMA(c, 10);
     const ma20 = calculateSMA(c, 20);
     const ma50 = calculateSMA(c, 50);
-
     const avgVol20 = calculateAvgVolume(v, 20);
 
     const lastIndex = c.length - 1;
     const currentPrice = c[lastIndex];
     const currentVolume = v[lastIndex];
-    const currentAvgVol20 = avgVol20[lastIndex];
+    const currentAvgVol = avgVol20[lastIndex];
 
-    const currentMA10 = ma10[lastIndex];
-    const currentMA20 = ma20[lastIndex];
-    const currentMA50 = ma50[lastIndex];
-
-    const isBelowMA10 = currentMA10 !== null && currentPrice < currentMA10;
-    const isBelowMA20 = currentMA20 !== null && currentPrice < currentMA20;
-    const isBelowMA50 = currentMA50 !== null && currentPrice < currentMA50;
-
+    const isBelowMA10 = ma10[lastIndex] !== null && currentPrice < ma10[lastIndex];
+    const isBelowMA20 = ma20[lastIndex] !== null && currentPrice < ma20[lastIndex];
+    const isBelowMA50 = ma50[lastIndex] !== null && currentPrice < ma50[lastIndex];
     const isBelowAll = isBelowMA10 && isBelowMA20 && isBelowMA50;
 
-    // Thêm điều kiện volume
-    const isHighVolume = currentAvgVol20 && currentVolume > currentAvgVol20;
+    const isHighVolume = currentAvgVol && currentVolume > currentAvgVol;
+
+    const isBullish =
+      ma10[lastIndex] &&
+      ma20[lastIndex] &&
+      ma50[lastIndex] &&
+      currentPrice > ma10[lastIndex] &&
+      ma10[lastIndex] > ma20[lastIndex] &&
+      ma20[lastIndex] > ma50[lastIndex];
 
     return {
       symbol,
       resolution,
       currentPrice,
       currentVolume,
-      currentAvgVol20,
+      currentAvgVol,
       isHighVolume,
       isBelowMA10,
       isBelowMA20,
+      isBelowMA50,
       isBelowAll,
-      isBullish: currentPrice > currentMA10 && currentMA10 > currentMA20 && currentMA20 > currentMA50[lastIndex],
+      isBullish,
       timestamps: t,
       closes: c,
       highs: h,
       lows: l,
-      volumes: v
+      volumes: v,
+      ma10,
+      ma20,
+      ma50,
+      avgVol20
     };
-
   } catch (err) {
     console.error(`❌ Lỗi khi xử lý ${symbol}:`, err.message);
     return {
       symbol,
       resolution,
-      error: err.message
+      error: err.message,
+      timestamps: [],
+      closes: [],
+      highs: [],
+      lows: [],
+      volumes: [],
+      ma10: [],
+      ma20: [],
+      ma50: [],
+      avgVol20: []
     };
   }
 }
 
-// 🚨 HÀM MỚI: Phát hiện cả điểm mua và bán theo Darvas Box
-function detectDarvasSignals(timestamps, highs, lows, closes, boxPeriod = 5) {
-  const results = [];
-
-  for (let i = boxPeriod; i < closes.length; i++) {
-    // Lấy N phiên trước đó để xác định hộp
-    const lookback = highs.slice(i - boxPeriod, i);
-    const lookbackLows = lows.slice(i - boxPeriod, i);
-
-    // Xác định Top và Bottom của hộp
-    const top = Math.max(...lookback);
-    const bottom = Math.min(...lookbackLows);
-
-    // Giá hiện tại (hôm nay)
-    const currentClose = closes[i];
-
-    // Đỉnh và đáy của hộp hôm qua
-    const prevLookback = highs.slice(i - boxPeriod - 1, i - 1);
-    const prevLookbackLows = lows.slice(i - boxPeriod - 1, i - 1);
-    const prevTop = Math.max(...prevLookback);
-    const prevBottom = Math.min(...prevLookbackLows);
-
-    // Tín hiệu mua: giá hôm nay > đỉnh hộp hôm qua
-    const buySignal = currentClose > prevTop;
-
-    // Tín hiệu bán: giá hôm nay < đáy hộp hôm qua
-    const sellSignal = currentClose < prevBottom;
-
-    results.push({
-      date: new Date(timestamps[i] * 1000).toISOString().split('T')[0],
-      high: highs[i],
-      low: lows[i],
-      close: closes[i],
-      top: top,
-      bottom: bottom,
-      isBuySignal: buySignal,
-      isSellSignal: sellSignal
-    });
-  }
-
-  return results;
-}
-
-// Hàm kiểm tra MA chính
+// ─── 7. 🧠 Logic quét chính: Darvas + tín hiệu MA bổ sung ─────────────────────
 async function checkAllMA() {
   const symbols = await getWatchedSymbols();
-
-  let message = '';
+  console.log(`🔍 Đang kiểm tra ${symbols.length} mã cổ phiếu...`);
 
   for (const symbol of symbols) {
-    const result = await checkMASingle(symbol);
+    const dailyResult = await checkMASingle(symbol, '1D');
+    if (dailyResult.error) continue;
+
     const {
-      isBelowMA10,
-      isBelowMA20,
-      currentVolume,
-      currentAvgVol20,
-      isHighVolume,
-      isBelowAll,
-      isBullish,
       timestamps,
       highs,
       lows,
-      closes
-    } = result;
+      closes,
+      volumes,
+      ma10,
+      ma20,
+      ma50,
+      avgVol20,
+      isBullish,
+      currentPrice,
+      currentVolume,
+      currentAvgVol,
+      isHighVolume,
+      isBelowMA10,
+      isBelowMA20,
+      isBelowMA50,
+      isBelowAll
+    } = dailyResult;
 
-    // 🚨 GỌI HÀM TÌM ĐIỂM MUA/BÁN THEO DARVAS BOX
-    const darvasSignals = detectDarvasSignals(timestamps, highs, lows, closes);
-    const latestDarvasSignal = darvasSignals[darvasSignals.length - 1];
+    let message = '';
 
-    if (latestDarvasSignal) {
-      if (latestDarvasSignal.isBuySignal) {
+    // ─── 🚀 TÍN HIỆU DARVAS (ĐÃ ĐƯỢC XÁC NHẬN) ─────────────────────────────────
+    const darvasSignals = detectDarvasWithConfirmation(
+      timestamps,
+      highs,
+      lows,
+      closes,
+      ma10,
+      ma20,
+      ma50,
+      volumes,
+      avgVol20,
+      5
+    );
+
+    const latest = darvasSignals[darvasSignals.length - 1];
+
+    if (latest) {
+      if (latest.isConfirmedBuy) {
         message = `
-          🟢 DARVAS BOX BUY SIGNAL
-          - Cổ phiếu: ${symbol}
-          - Ngày: ${latestDarvasSignal.date}
-          - Giá đóng cửa: ${latestDarvasSignal.close.toFixed(2)}
-          - Vượt đỉnh hộp: ${latestDarvasSignal.top.toFixed(2)}
-
-          🎯 KẾT LUẬN:
-          ===> Khuyến nghị: MUA (Giá vượt đỉnh hộp Darvas)
-        `;
+🟢 DARVAS + MA + KHỐI LƯỢNG XÁC NHẬN MUA
+📌 ${symbol} | ${latest.date}
+💰 Giá: ${latest.close.toFixed(2)} > Đỉnh hộp: ${latest.top.toFixed(2)}
+📊 Xác nhận:
+   • Xu hướng tăng (MA20 > MA50): ✅
+   • KL > TB 20 ngày: ${latest.isHighVol ? '✅' : '❌'} (${latest.volume.toFixed(0)} vs ${latest.avgVol20?.toFixed(0) || 'N/A'})
+🎯 KHUYẾN NGHỊ: MUA — Tín hiệu mạnh, đa yếu tố xác nhận
+`;
         console.log(message);
-        await sendTelegramNotification(message);
+        // await sendTelegramNotification(message);
       }
 
-      if (latestDarvasSignal.isSellSignal) {
+      if (latest.isConfirmedSell) {
         message = `
-          🔴 DARVAS BOX SELL SIGNAL
-          - Cổ phiếu: ${symbol}
-          - Ngày: ${latestDarvasSignal.date}
-          - Giá đóng cửa: ${latestDarvasSignal.close.toFixed(2)}
-          - Phá đáy hộp: ${latestDarvasSignal.bottom.toFixed(2)}
-
-          🎯 KẾT LUẬN:
-          ===> Khuyến nghị: BÁN (Giá phá đáy hộp Darvas)
-        `;
+🔴 DARVAS + MA XÁC NHẬN BÁN
+📌 ${symbol} | ${latest.date}
+💰 Giá: ${latest.close.toFixed(2)} < Đáy hộp: ${latest.bottom.toFixed(2)}
+📉 Xác nhận:
+   • Dưới MA20: ✅ (${latest.close.toFixed(2)} < ${latest.ma20?.toFixed(2) || 'N/A'})
+🎯 KHUYẾN NGHỊ: BÁN / DỪNG LỖ — Ưu tiên bảo toàn vốn
+`;
         console.log(message);
-        await sendTelegramNotification(message);
+        // await sendTelegramNotification(message);
       }
     }
 
-    // Tín hiệu mạnh: giá dưới MA10, MA20, MA50 (toàn bộ)
+    // ─── 📌 CÁC TÍN HIỆU DỰA TRÊN MA (ĐỘC LẬP VỚI DARVAS) ──────────────────────
+    // Dùng làm tham khảo hoặc fallback truyền thống
+
+    // 1️⃣ Xu hướng giảm mạnh: dưới MA10, MA20, MA50 (cả ngày & tuần)
     if (isBelowAll) {
-      const resultW = await checkMASingle(symbol, '1W');
-      const { isBelowMA10: isBelowMA10W, isBelowMA20: isBelowMA20W } = resultW;
+      const weeklyResult = await checkMASingle(symbol, '1W');
+      const { isBelowMA10: isBelowMA10W, isBelowMA20: isBelowMA20W } = weeklyResult;
 
       if (isBelowMA10W && isBelowMA20W) {
         message = `
-        🔍 ${symbol} - Dưới cả MA10, MA20, MA50 (Tín hiệu yếu cực)
-        - Volume hiện tại: ${currentVolume.toFixed(2)}
-        - AVG Volume 20 ngày: ${currentAvgVol20.toFixed(2)}
-        - Volume cao hơn TB? ${isHighVolume ? '✅ Có' : '❌ Không'}
+⚠️ ${symbol} — Xu hướng giảm mạnh (Ngày & Tuần)
+📉 Dưới MA10, MA20, MA50 trên cả hai khung thời gian
+📊 Khối lượng: ${currentVolume.toFixed(2)} | TB 20 ngày: ${currentAvgVol?.toFixed(2)}
+   KL > TB? ${isHighVolume ? '✅ Có' : '❌ Không'}
 
-        🎯 KẾT LUẬN:
-        ===> Khuyến nghị: BÁN (Tín hiệu yếu rõ rệt)
-      `;
+🎯 KẾT LUẬN:
+   ===> KHUYẾN NGHỊ: BÁN (Tín hiệu yếu rõ rệt)
+`;
         console.log(message);
-        await sendTelegramNotification(message);
+        // await sendTelegramNotification(message);
       }
     }
 
-    // Tín hiệu bán: giá dưới MA10 và MA20 (nhưng có thể chưa tới MA50)
+    // 2️⃣ Tín hiệu bán trung gian: dưới MA10 & MA20 ngày (xác nhận tuần)
     else if (isBelowMA10 && isBelowMA20) {
-      const resultW = await checkMASingle(symbol, '1W');
+      const weeklyResult = await checkMASingle(symbol, '1W');
       const {
         isBelowMA10: isBelowMA10W,
         isBelowMA20: isBelowMA20W,
         isHighVolume: isHighVolumeW,
-        currentAvgVol20: currentAvgVol20W,
+        currentAvgVol: currentAvgVolW,
         currentVolume: currentVolumeW
-      } = resultW;
+      } = weeklyResult;
 
       if (isBelowMA10W && isBelowMA20W) {
         message = `
-        🔍 Đang lấy dữ liệu ${symbol}
-        - Dưới MA10 ngày và tuần? ✅ Có
-        - Dưới MA20 ngày và tuần? ✅ Có
-        - Volume hiện tại (ngày): ${currentVolumeW.toFixed(2)}
-        - AVG Volume 20 ngày: ${currentAvgVol20W.toFixed(2)}
-        - Volume cao hơn TB? ${isHighVolumeW ? '✅ Có' : '❌ Không'}
+🔍 ${symbol} — Đồng thuận giảm được xác nhận
+✅ Dưới MA10 (Ngày+Tuần) & MA20 (Ngày+Tuần)
+📊 KL ngày: ${currentVolumeW.toFixed(2)} | TB 20 ngày: ${currentAvgVolW?.toFixed(2)}
+   Bùng nổ KL? ${isHighVolumeW ? '✅ Có' : '❌ Không'}
 
-        🎯 KẾT LUẬN:
-        ===> Khuyến nghị: BÁN ${isHighVolumeW ? '(Tín hiệu mạnh hơn do volume tăng)' : ''}
-      `;
+🎯 KẾT LUẬN:
+   ===> KHUYẾN NGHỊ: BÁN ${isHighVolumeW ? '(Mạnh hơn do bùng nổ khối lượng)' : ''}
+`;
         console.log(message);
-        await sendTelegramNotification(message);
+        // await sendTelegramNotification(message);
       }
 
       if (isBelowMA10W && !isBelowMA20W) {
         message = `
-        🔍 Đang lấy dữ liệu ${symbol}
-        - Dưới MA10 ngày và tuần? ✅ Có
-        - Dưới MA20 ngày? ✅ Có
-        - Dưới MA20 tuần? ❌ Không
-        - Volume hiện tại (ngày): ${currentVolumeW.toFixed(2)}
-        - AVG Volume 20 ngày: ${currentAvgVol20W.toFixed(2)}
-        - Volume cao hơn TB? ${isHighVolumeW ? '✅ Có' : '❌ Không'}
+🔍 ${symbol} — Tín hiệu tuần hỗn hợp
+✅ Dưới MA10 (Ngày+Tuần) & MA20 (ngày)
+❌ Nhưng *trên* MA20 (tuần) → có thể là hỗ trợ
 
-        🎯 KẾT LUẬN:
-        ===> Khuyến nghị: BÁN 1 phần ${isHighVolumeW ? '(Tín hiệu mạnh hơn do volume tăng)' : ''}
-      `;
+📊 KL ngày: ${currentVolumeW.toFixed(2)} | TB 20 ngày: ${currentAvgVolW?.toFixed(2)}
+   Bùng nổ KL? ${isHighVolumeW ? '✅ Có' : '❌ Không'}
+
+🎯 KẾT LUẬN:
+   ===> KHUYẾN NGHỊ: BÁN 1 PHẦN ${isHighVolumeW ? '(Mạnh hơn do bùng nổ khối lượng)' : ''}
+`;
         console.log(message);
-        await sendTelegramNotification(message);
+        // await sendTelegramNotification(message);
       }
     }
 
-    // Thêm: Tín hiệu mua nếu isBullish + volume mạnh
+    // 3️⃣ Tín hiệu tăng mạnh: MA dốc + khối lượng (chưa có tín hiệu Darvas)
     if (isBullish && isHighVolume) {
-      const resultW = await checkMASingle(symbol, '1W');
-      const { isBullish: isBullishW } = resultW;
+      const weeklyResult = await checkMASingle(symbol, '1W');
+      const { isBullish: isBullishW } = weeklyResult;
 
       if (isBullishW) {
         message = `
-        🚀 ${symbol} - Xu hướng tăng đẹp (giá > MA10 > MA20 > MA50)
-        - Volume hiện tại: ${currentVolume.toFixed(2)}
-        - AVG Volume 20 ngày: ${currentAvgVol20.toFixed(2)}
-        - Volume cao hơn TB? ✅ Có
+🚀 ${symbol} — Xu hướng tăng mạnh (MA10 > MA20 > MA50 + KL)
+📈 Giá: ${currentPrice.toFixed(2)}
+📊 Khối lượng: ${currentVolume.toFixed(2)} > TB 20 ngày (${currentAvgVol?.toFixed(2)})
 
-        🎯 KẾT LUẬN:
-        ===> Khuyến nghị: MUA (Tín hiệu tăng mạnh, có volume hỗ trợ)
-      `;
+🎯 KẾT LUẬN:
+   ===> KHUYẾN NGHỊ: CÂN NHẮC MUA (Xu hướng mạnh có hỗ trợ khối lượng — theo dõi breakout Darvas hoặc hồi về MA)
+`;
         console.log(message);
-        await sendTelegramNotification(message);
+        // await sendTelegramNotification(message);
       }
     }
   }
+
+  console.log('\n✅ Hoàn tất quét.');
 }
 
-checkAllMA();
+// ─── 8. Chạy chương trình ─────────────────────────────────────────────────────
+checkAllMA().catch(err => {
+  console.error('❌ Lỗi toàn cục:', err);
+  process.exit(1);
+});
