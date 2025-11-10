@@ -5,13 +5,9 @@ on:
     branches:
       - main
 
-  # Cho phép chạy thủ công từ UI
   workflow_dispatch:
 
-  # Schedule phải nằm cùng cấp với push & workflow_dispatch
   schedule:
-    # Chạy mỗi 30 phút, từ Thứ Hai đến Thứ Sáu, từ 09:00 - 15:30 giờ Việt Nam
-    # => Tương ứng 02:00 - 08:30 UTC
     - cron: "*/1 * * * *"
 
 jobs:
@@ -20,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout code
-      - uses: actions/checkout@v4
+        uses: actions/checkout@v4 # <-- phải nằm dưới name và thụt vào
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
