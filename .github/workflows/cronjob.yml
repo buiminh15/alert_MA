@@ -3,7 +3,7 @@ name: Cron Job - MA Checker
 on:
   schedule:
     # Chạy mỗi 30 phút một lần, từ Thứ Hai đến Thứ Sáu (1-5), từ 9h đến 15h30
-    - cron: "*/4"
+    - cron: "*/5 * * * *"
   # Cho phép chạy thủ công từ giao diện GitHub
   workflow_dispatch:
 
@@ -28,7 +28,7 @@ jobs:
 
       # 4. Chạy script
       - name: Run MA checker
-        run: node index.js
+        run: node index.js # Cập nhật đường dẫn nếu cần
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
