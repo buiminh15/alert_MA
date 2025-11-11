@@ -430,3 +430,21 @@ checkAllMA().catch(err => {
   console.error('❌ Lỗi toàn cục:', err);
   process.exit(1);
 });
+
+const nowUTC = new Date();
+const formatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Ho_Chi_Minh',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  timeZoneName: 'short'
+});
+
+const nowICT = formatter.format(nowUTC);
+
+console.log(`[DEBUG] UTC time: ${nowUTC.toISOString()}`);
+console.log(`[DEBUG] ICT time (Vietnam): ${nowICT}`);
