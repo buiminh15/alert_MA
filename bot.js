@@ -13,7 +13,7 @@ async function sendTelegramNotification(message, isDarvasRoom = false) {
   console.log('📢 [bot.js:13]', 'running');
   // 3. Chọn chat_id dựa trên tham số isDarvasRoom
   const bot = isDarvasRoom ? TELEGRAM_BOT_TOKEN_DARVAS : TELEGRAM_BOT_TOKEN;
-
+  console.log('📢 [bot.js:16]', bot);
   // 4. Sửa URL (loại bỏ dấu cách)
   const url = `https://api.telegram.org/bot${bot}/sendMessage`;
 
