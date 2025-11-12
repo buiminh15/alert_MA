@@ -7,13 +7,11 @@ const TELEGRAM_BOT_TOKEN_DARVAS = process.env.TELEGRAM_BOT_TOKEN_DARVAS;
 
 async function sendTelegramNotification(message, isDarvasRoom = false) {
   if (!TELEGRAM_BOT_TOKEN || (!TELEGRAM_CHAT_ID && !TELEGRAM_BOT_TOKEN_DARVAS)) {
-    console.log('📢 [bot.js:10]', !TELEGRAM_BOT_TOKEN || (!TELEGRAM_CHAT_ID && !TELEGRAM_BOT_TOKEN_DARVAS));
     return;
   }
   console.log('📢 [bot.js:13]', 'running');
   // 3. Chọn chat_id dựa trên tham số isDarvasRoom
   const bot = isDarvasRoom ? TELEGRAM_BOT_TOKEN_DARVAS : TELEGRAM_BOT_TOKEN;
-  console.log('📢 [bot.js:16]', bot);
   // 4. Sửa URL (loại bỏ dấu cách)
   const url = `https://api.telegram.org/bot${bot}/sendMessage`;
 
