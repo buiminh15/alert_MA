@@ -450,9 +450,11 @@ async function checkAllMA() {
 checkAllMA().catch(err => {
   console.error('❌ Lỗi toàn cục:', err);
   process.exit(1);
-});
+}).finally(() => {
+  checkAllDarvas().catch(err => {
+    console.error('❌ Lỗi toàn cục Darvas:', err);
+    process.exit(1);
+  });
 
-checkAllDarvas().catch(err => {
-  console.error('❌ Lỗi toàn cục Darvas:', err);
-  process.exit(1);
-});
+})
+

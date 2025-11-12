@@ -234,6 +234,7 @@ async function checkDarvasSingle(symbol, resolution = '1D') {
 
 // ─── 6. 🧠 Logic quét chính: chỉ Darvas thuần ──────────────────────────────────
 async function checkAllDarvas() {
+  console.log('📢 [darvas.js:237]', 'running darvas');
   const symbols = await getWatchedSymbols();
 
   for (const symbol of symbols) {
