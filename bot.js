@@ -26,7 +26,7 @@ async function sendTelegramNotification(message, isDarvasRoom = false) {
     console.log('📢 Notification sent to telegram');
   } catch (error) {
     if (error.response) {
-      console.log('📢 [bot.js:29]', 'error');
+      console.log('📢 [bot.js:29]', 'error', JSON.stringify(error), error?.message);
     } else {
       console.log('📢 [bot.js:31]', 'error');
     }
