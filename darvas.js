@@ -39,11 +39,12 @@ function calculateAvgVolume(volumes, period) {
 }
 
 // ─── 3. Chuyển dữ liệu ngày → tuần (đơn giản hóa) ────────────────────────────
-function getWeeklyDataFromDaily(timestamps, closes, volumes, highs, lows) {
+function getWeeklyDataFromDaily(timestamps, closes, volumes, highs, lows, opens) {
   const weeklyCloses = [];
   const weeklyVolumes = [];
   const weeklyHighs = [];
   const weeklyLows = [];
+  const weeklyOpens = []; // Thêm dòng này
   const weeklyTimestamps = [];
   let lastWeek = null;
 
@@ -56,6 +57,7 @@ function getWeeklyDataFromDaily(timestamps, closes, volumes, highs, lows) {
       weeklyVolumes.push(volumes[i]);
       weeklyHighs.push(highs[i]);
       weeklyLows.push(lows[i]);
+      weeklyOpens.push(opens[i]); // Thêm dòng này
       weeklyTimestamps.push(timestamps[i]);
       lastWeek = weekNum;
     }
@@ -66,7 +68,8 @@ function getWeeklyDataFromDaily(timestamps, closes, volumes, highs, lows) {
     closes: weeklyCloses,
     volumes: weeklyVolumes,
     highs: weeklyHighs,
-    lows: weeklyLows
+    lows: weeklyLows,
+    opens: weeklyOpens // Trả về thêm opens
   };
 }
 
@@ -76,6 +79,85 @@ function getWeekNumber(d) {
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+}
+
+// ─── 8. 🚨 PHÁT HIỆN CLIMAX (đã cải tiến: thêm nhận diện nến) ───────────────────
+function detectClimax(
+  timestamps,
+  highs,
+  lows,
+  closes,
+  volumes,
+  avgVol20,
+  opens
+) {
+  const results = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    const currentHigh = highs[i];
+    const currentLow = lows[i];
+    const currentClose = closes[i];
+    const currentOpen = opens[i];
+    const currentVolume = volumes[i];
+    const avgVolume = avgVol20[i];
+    const range = currentHigh - currentLow;
+
+    let isBuyingClimax = false;
+    let isSellingClimax = false;
+
+    // 🟢 Buying Climax: kết hợp new high + volume + nến đảo chiều
+    if (
+      avgVolume &&
+      currentVolume > avgVolume * 2.5 &&
+      i >= 5 && currentHigh > Math.max(...highs.slice(Math.max(0, i - 5), i))
+    ) {
+      const bodySize = Math.abs(currentClose - currentOpen);
+      const upperWick = currentHigh - Math.max(currentClose, currentOpen);
+      const lowerWick = Math.min(currentClose, currentOpen) - currentLow;
+
+      // Điều kiện gốc (không cần nến cụ thể)
+      const basicClimax = range > 0 && upperWick / range > 0.5 && currentClose < currentHigh;
+
+      // Nhận diện nến Shooting Star (đỉnh dài, body nhỏ, close gần open)
+      const isShootingStar = range > 0 && upperWick / range > 0.6 && bodySize / range < 0.2 && currentClose < currentHigh;
+
+      // Gộp điều kiện
+      if (basicClimax || isShootingStar) {
+        isBuyingClimax = true;
+      }
+    }
+
+    // 🔴 Selling Climax: kết hợp new low + volume + nến đảo chiều
+    if (
+      avgVolume &&
+      currentVolume > avgVolume * 2.5 &&
+      i >= 5 && currentLow < Math.min(...lows.slice(Math.max(0, i - 5), i))
+    ) {
+      const bodySize = Math.abs(currentClose - currentOpen);
+      const lowerWick = Math.min(currentClose, currentOpen) - currentLow;
+
+      // Điều kiện gốc
+      const basicClimax = range > 0 && lowerWick / range > 0.5 && currentClose > currentLow;
+
+      // Nhận diện nến Hammer hoặc Inverted Hammer (lower wick lớn, body nhỏ)
+      const isHammer = range > 0 && lowerWick / range > 0.6 && bodySize / range < 0.2 && currentClose > currentLow;
+
+      // Nhận diện Bearish Engulfing (nếu hôm trước tăng, hôm nay giảm mạnh bao trùm)
+      const isEngulfing = i > 0 && currentOpen < currentClose && currentClose > opens[i - 1] && currentOpen < closes[i - 1];
+
+      // Gộp điều kiện
+      if (basicClimax || isHammer || isEngulfing) {
+        isSellingClimax = true;
+      }
+    }
+
+    results.push({
+      isBuyingClimax,
+      isSellingClimax
+    });
+  }
+
+  return results;
 }
 
 // ─── 4. 🚀 HÀM DARVAS THUẦN: chỉ theo lý thuyết gốc ────────────────────────────
@@ -185,12 +267,13 @@ async function checkDarvasSingle(symbol, resolution = '1D') {
     let { t, c, o, h, l, v } = data;
 
     if (resolution === '1W') {
-      const weeklyData = getWeeklyDataFromDaily(t, c, v, h, l);
+      const weeklyData = getWeeklyDataFromDaily(t, c, v, h, l, o); // Truyền thêm o
       t = weeklyData.timestamps;
       c = weeklyData.closes;
       v = weeklyData.volumes;
       h = weeklyData.highs;
       l = weeklyData.lows;
+      o = weeklyData.opens; // Lấy opens mới
     }
 
     // Tính chỉ báo khối lượng
@@ -214,7 +297,8 @@ async function checkDarvasSingle(symbol, resolution = '1D') {
       highs: h,
       lows: l,
       volumes: v,
-      avgVol20
+      avgVol20,
+      opens: o // Trả về thêm opens
     };
   } catch (err) {
     console.error(`❌ Lỗi khi xử lý ${symbol}:`, err.message);
@@ -227,7 +311,8 @@ async function checkDarvasSingle(symbol, resolution = '1D') {
       highs: [],
       lows: [],
       volumes: [],
-      avgVol20: []
+      avgVol20: [],
+      opens: [] // Trả về thêm opens
     };
   }
 }
@@ -251,6 +336,7 @@ async function checkAllDarvas() {
       currentPrice,
       currentVolume,
       currentAvgVol,
+      opens // Lấy thêm opens
     } = dailyResult;
 
     // ─── 🚀 TÍN HIỆU DARVAS THUẦN ──────────────────────────────────────────────
@@ -264,29 +350,55 @@ async function checkAllDarvas() {
       5
     );
 
-    const latest = darvasSignals[darvasSignals.length - 1];
+    // ─── 🚨 PHÁT HIỆN CLIMAX ────────────────────────────────────────────────────
+    const climaxSignals = detectClimax(timestamps, highs, lows, closes, volumes, avgVol20, opens);
+
+    // Ghép dữ liệu climax vào mỗi tín hiệu Darvas
+    const combinedSignals = darvasSignals.map((signal, i) => ({
+      ...signal,
+      isBuyingClimax: climaxSignals[i]?.isBuyingClimax || false,
+      isSellingClimax: climaxSignals[i]?.isSellingClimax || false
+    }));
+
+    const latest = combinedSignals[combinedSignals.length - 1];
 
     if (latest) {
       if (latest.isConfirmedBuy) {
+        const climaxWarning = latest.isBuyingClimax
+          ? '\n⚠️ CẢNH BÁO: Mới qua Buying Climax — cẩn trọng, có thể tăng giả tạo!'
+          : latest.isSellingClimax
+            ? '\n🟢 TÍCH CỰC: Mới qua Selling Climax — điểm mua tiềm năng!'
+            : '';
+
         const message = `
-          🟢 DARVAS XÁC NHẬN MUA (THUẦN)
-          📌 ${symbol} | ${latest.date}
-          💰 Giá: ${latest.close.toFixed(2)} > Đỉnh hộp: ${latest.top.toFixed(2)}
-          📊 Xác nhận:
-            • KL > TB 20 ngày: ${latest.avgVol20 && latest.volume > latest.avgVol20 ? '✅' : '❌'} (${latest.volume.toFixed(0)} vs ${latest.avgVol20?.toFixed(0) || 'N/A'})
-          🎯 KHUYẾN NGHỊ: MUA — Tín hiệu Darvas thuần + khối lượng
-          `;
+      🟢 DARVAS XÁC NHẬN MUA (THUẦN)
+      📌 ${symbol} | ${latest.date}
+      💰 Giá: ${latest.close.toFixed(2)} > Đỉnh hộp: ${latest.top.toFixed(2)}
+      📊 Xác nhận:
+        • KL > TB 20 ngày: ${latest.avgVol20 && latest.volume > latest.avgVol20 ? '✅' : '❌'} (${latest.volume.toFixed(0)} vs ${latest.avgVol20?.toFixed(0) || 'N/A'})
+      💡 Phân tích thêm:
+        ${climaxWarning}
+      🎯 KHUYẾN NGHỊ: ${latest.isBuyingClimax ? 'CÂN NHẮC — Có rủi ro tăng giả tạo' : 'MUA — Tín hiệu Darvas thuần + khối lượng'}
+      `;
         console.log('📢 [darvas.js:279]', message);
         await sendTelegramNotification(message, true);
       }
 
       if (latest.isConfirmedSell) {
+        const climaxInfo = latest.isSellingClimax
+          ? '\n🟢 CẢNH BÁO: Mới qua Selling Climax — có thể là điểm mua tiềm năng, không phải bán!'
+          : latest.isBuyingClimax
+            ? '\n🔴 TÍCH CỰC: Mới qua Buying Climax — xác nhận xu hướng giảm'
+            : '';
+
         const message = `
-          🔴 DARVAS XÁC NHẬN BÁN (THUẦN)
-          📌 ${symbol} | ${latest.date}
-          💰 Giá: ${latest.close.toFixed(2)} < Đáy hộp: ${latest.bottom.toFixed(2)}
-          🎯 KHUYẾN NGHỊ: BÁN / DỪNG LỖ — Tín hiệu Darvas thuần
-          `;
+      🔴 DARVAS XÁC NHẬN BÁN (THUẦN)
+      📌 ${symbol} | ${latest.date}
+      💰 Giá: ${latest.close.toFixed(2)} < Đáy hộp: ${latest.bottom.toFixed(2)}
+      💡 Phân tích thêm:
+        ${climaxInfo}
+      🎯 KHUYẾN NGHỊ: ${latest.isSellingClimax ? 'CÂN NHẮC — Có thể là điểm mua ngược!' : 'BÁN / DỪNG LỖ — Tín hiệu Darvas thuần'}
+      `;
         console.log('📢 [darvas.js:290]', message);
         await sendTelegramNotification(message, true);
       }
@@ -300,6 +412,12 @@ async function checkAllDarvas() {
     } = weeklyResult;
 
     if (latest) {
+      const climaxInfo = latest.isBuyingClimax
+        ? '🚨 MỚI QUA BUYING CLIMAX — Cẩn trọng tăng giả tạo!'
+        : latest.isSellingClimax
+          ? '🟢 MỚI QUA SELLING CLIMAX — Có thể là điểm mua tiềm năng!'
+          : '✅ Không có dấu hiệu climax gần đây.';
+
       const message = `
 🔍 ${symbol} — Tổng quan Darvas
 📈 Giá: ${currentPrice.toFixed(2)}
@@ -307,6 +425,9 @@ async function checkAllDarvas() {
 📊 KL tuần: ${currentVolumeW.toFixed(0)} | TB 20 tuần: ${currentAvgVolW?.toFixed(0)}
 📦 Hộp hiện tại: Top=${latest.top?.toFixed(2) || 'N/A'}, Bottom=${latest.bottom?.toFixed(2) || 'N/A'}
 🎯 Tín hiệu: ${latest.isConfirmedBuy ? '🟢 MUA' : latest.isConfirmedSell ? '🔴 BÁN' : '⚪️ CHỜ'}
+
+💡 PHÂN TÍCH CLIMAX:
+   ${climaxInfo}
 
 🎯 KẾT LUẬN:
    ===> ${latest.isConfirmedBuy ? 'CÂN NHẮC MUA (Darvas + KL)' : latest.isConfirmedSell ? 'CÂN NHẮC BÁN (Darvas)' : 'Theo dõi tiếp'}
