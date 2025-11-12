@@ -276,6 +276,7 @@ async function checkAllDarvas() {
             • KL > TB 20 ngày: ${latest.avgVol20 && latest.volume > latest.avgVol20 ? '✅' : '❌'} (${latest.volume.toFixed(0)} vs ${latest.avgVol20?.toFixed(0) || 'N/A'})
           🎯 KHUYẾN NGHỊ: MUA — Tín hiệu Darvas thuần + khối lượng
           `;
+        console.log('📢 [darvas.js:279]', message);
         await sendTelegramNotification(message, true);
       }
 
@@ -286,6 +287,7 @@ async function checkAllDarvas() {
           💰 Giá: ${latest.close.toFixed(2)} < Đáy hộp: ${latest.bottom.toFixed(2)}
           🎯 KHUYẾN NGHỊ: BÁN / DỪNG LỖ — Tín hiệu Darvas thuần
           `;
+        console.log('📢 [darvas.js:290]', message);
         await sendTelegramNotification(message, true);
       }
     }
@@ -309,6 +311,7 @@ async function checkAllDarvas() {
 🎯 KẾT LUẬN:
    ===> ${latest.isConfirmedBuy ? 'CÂN NHẮC MUA (Darvas + KL)' : latest.isConfirmedSell ? 'CÂN NHẮC BÁN (Darvas)' : 'Theo dõi tiếp'}
 `;
+      console.log('📢 [darvas.js:314]', message);
       await sendTelegramNotification(message, true);
     }
   }
