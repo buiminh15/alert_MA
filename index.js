@@ -3,7 +3,7 @@ const supabase = require('./config/supabase');
 const { dateToTimestamp, formatDate, getDates } = require('./utils');
 const { sendTelegramNotification } = require('./bot');
 const { SMA, EMA } = require('technicalindicators'); // Thêm thư viện
-const { checkAllDarvas } = require('./darvas');
+const { checkAllDarvasStopLoss } = require('./darvas');
 
 // ─── 1. Lấy danh sách mã theo dõi từ Supabase ─────────────────────────────────
 async function getWatchedSymbols() {
@@ -451,7 +451,7 @@ checkAllMA().catch(err => {
   console.error('❌ Lỗi toàn cục:', err);
   process.exit(1);
 }).finally(() => {
-  checkAllDarvas().catch(err => {
+  checkAllDarvasStopLoss().catch(err => {
     console.error('❌ Lỗi toàn cục Darvas:', err);
     process.exit(1);
   });

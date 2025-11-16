@@ -39,9 +39,12 @@ function formatDate(date) {
   return `${d}/${m}/${y}`;
 }
 
-function getDates() {
-  const today = new Date();
+function getDates(input = new Date()) {
+  const today = new Date(input);
   today.setHours(0, 0, 0, 0); // Đặt về 00:00:00
+
+  const oneWeekAgo = new Date(today);
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
   // Sao chép today → lùi 3 tháng
   const threeMonthsAgo = new Date(today);
@@ -60,6 +63,7 @@ function getDates() {
 
   return {
     today,
+    oneWeekAgo,
     threeMonthsAgo,
     oneYearAgo
   };
